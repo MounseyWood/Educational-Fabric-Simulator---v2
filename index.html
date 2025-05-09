@@ -90,12 +90,6 @@
       button:hover {
         background: #666;
       }
-      #dragStatus {
-        color: #77c5d5;
-        font-weight: bold;
-        margin-bottom: 10px;
-        height: 20px;
-      }
     </style>
   </head>
   <body>
@@ -136,9 +130,6 @@
         </div>
       </div>
 
-      <!-- Drag Mode Status -->
-      <div id="dragStatus"></div>
-
       <!-- Pinning Mode (only for Plane mode) -->
       <div class="parameter">
         <div class="paramHeader">Pinning Mode:</div>
@@ -165,6 +156,7 @@
           <div class="paramDesc">Constraint relaxations per frame (Off = 1).</div>
         </div>
       </div>
+
       <!-- Stretch -->
       <div class="parameter">
         <div class="paramHeader">Stretch: <span id="stretchVal"></span></div>
@@ -346,14 +338,7 @@
       let dragPointIndex = null;
       let dragPlaneZ = 0;
       let dragHandleSize = 8; // Size of the draggable point visuals
-      let selectionRadius = 30; // Increased from 10 to make selection easier
-      let cameraPosition = { x: 0, y: 0, z: 600 }; // Default camera position
-      let cameraMatrix = []; // Store the camera transformation matrix
-      
-      // For debugging drag functionality
-      let lastAttemptedDrag = { x: 0, y: 0 };
-      let selectedPoint = null;
-      let selectionDebug = "";
+      let selectionRadius = 30; // Increased selection radius
 
       // For Stress shading, store each cell's rest area
       let cellRestArea = [];
@@ -362,23 +347,20 @@
       const STRUCTURAL = "structural";
       const SHEAR = "shear";
       const BENDING = "bending";
+
       function setup() {
         let cnv = createCanvas(windowWidth - 280, windowHeight, WEBGL);
         cnv.parent("canvasContainer");
         cnv.style("display", "block");
         createUI();
         setupCloth();
-        
-        // Initialize camera matrix
-        cameraMatrix = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
       }
 
       function createUI() {
         // Reset Cloth and Reset Orientation buttons
         select("#resetBtn").mousePressed(setupCloth);
         select("#resetOrientationBtn").mousePressed(() => { 
-          doResetOrientation = true; 
-          updateDragStatus("Camera reset for better dragging");
+          doResetOrientation = true;
         });
 
         // Play/Pause Simulation button
@@ -421,11 +403,6 @@
         interactionRadio.parent("interactionRadioGroup");
         interactionRadio.changed(() => {
           interactionMode = interactionRadio.value();
-          if (interactionMode === "drag") {
-            updateDragStatus("Drag Mode Active - Click and drag cloth points");
-          } else {
-            updateDragStatus("");
-          }
         });
 
         // Pinning Mode radio (for Plane mode)
@@ -551,11 +528,6 @@
         }, 0, 1, 0.4, 0.01);
       }
 
-      // Update drag status message
-      function updateDragStatus(message) {
-        select("#dragStatus").html(message);
-      }
-
       /* Setup cloth based on simulation mode */
       function setupCloth() {
         clothPoints = [];
@@ -566,7 +538,6 @@
         centers = [];
         cellRestArea = [];
         dragPointIndex = null;
-        selectedPoint = null;
 
         let clothWidth = (cols - 1) * spacing;
         let clothHeight = (rows - 1) * spacing;
@@ -575,7 +546,6 @@
           let startX = -clothWidth/2 + clothShiftX;
           let startY = -clothHeight/2;
           createClothPoints_Plane(startX, startY, 0);
-
         } else {
           // Draped mode
           if (formMode === "sphere") {
@@ -595,7 +565,6 @@
             clothPoints[centerIdx].oldx = sphereCentre.x;
             clothPoints[centerIdx].oldy = sphereCentre.y - sphereRadius;
             clothPoints[centerIdx].oldz = sphereCentre.z;
-
           } else if (formMode === "cylinder") {
             let startY = cylinderTopY;
             createClothPoints_Draped(-clothWidth/2, startY, -clothHeight/2);
@@ -626,13 +595,6 @@
         }
 
         createSubPointsAndConstraints();
-        
-        // Reset interaction state
-        if (interactionMode === "drag") {
-          updateDragStatus("Drag Mode Active - Click and drag cloth points");
-        } else {
-          updateDragStatus("");
-        }
       }
 
       function createClothPoints_Plane(startX, startY, startZ) {
@@ -873,8 +835,9 @@
 
       function updateCloth() {
         let freq = 0.01;
-        for (let p of clothPoints) {
-          if (!p.pinned && (dragPointIndex === null || clothPoints.indexOf(p) !== dragPointIndex)) {
+        for (let i = 0; i < clothPoints.length; i++) {
+          let p = clothPoints[i];
+          if (!p.pinned && i !== dragPointIndex) {
             let vx = (p.x - p.oldx) * (dampingOn ? damping : BASE_DAMPING);
             let vy = (p.y - p.oldy) * (dampingOn ? damping : BASE_DAMPING);
             let vz = (p.z - p.oldz) * (dampingOn ? damping : BASE_DAMPING);
@@ -901,11 +864,12 @@
           for (let c of clothConstraints) {
             let p1 = clothPoints[c.p1];
             let p2 = clothPoints[c.p2];
+            
             // Skip constraints for points being manually dragged
-            if ((dragPointIndex !== null && 
-                (c.p1 === dragPointIndex || c.p2 === dragPointIndex))) {
+            if (c.p1 === dragPointIndex || c.p2 === dragPointIndex) {
               continue;
             }
+            
             let dx = p2.x - p1.x;
             let dy = p2.y - p1.y;
             let dz = p2.z - p1.z;
@@ -914,12 +878,12 @@
             let offsetX = dx * 0.5 * diff;
             let offsetY = dy * 0.5 * diff;
             let offsetZ = dz * 0.5 * diff;
-            if (!p1.pinned) {
+            if (!p1.pinned && c.p1 !== dragPointIndex) {
               p1.x += offsetX;
               p1.y += offsetY;
               p1.z += offsetZ;
             }
-            if (!p2.pinned) {
+            if (!p2.pinned && c.p2 !== dragPointIndex) {
               p2.x -= offsetX;
               p2.y -= offsetY;
               p2.z -= offsetZ;
@@ -1022,134 +986,106 @@
         }
       }
 
-      /* FIXED: 3D Dragging - Improved point detection and mouse-to-world conversion */
+      /* SIMPLIFIED DRAG FUNCTIONALITY */
       function mousePressed() {
         if (interactionMode === "drag") {
-          lastAttemptedDrag.x = mouseX;
-          lastAttemptedDrag.y = mouseY;
+          // Find closest point to mouse
+          let closest = null;
+          let closestDist = selectionRadius;
           
-          // Get closest visible point to mouse
-          let closest = findClosestPoint();
+          for (let i = 0; i < clothPoints.length; i++) {
+            let p = clothPoints[i];
+            if (p.pinned) continue; // Skip pinned points
+            
+            // Project the 3D point to screen coordinates
+            let pointX = p.x;
+            let pointY = p.y;
+            let pointZ = p.z;
+            
+            // Use p5.js functions to convert 3D to screen coordinates
+            let projX = screenX(pointX, pointY, pointZ);
+            let projY = screenY(pointX, pointY, pointZ);
+            let projZ = screenZ(pointX, pointY, pointZ);
+            
+            // Calculate distance to mouse in screen space
+            let d = dist(mouseX, mouseY, projX, projY);
+            
+            // Check if this point is closest and in front
+            if (d < closestDist) {
+              closestDist = d;
+              closest = i;
+              dragPlaneZ = pointZ;
+            }
+          }
           
           if (closest !== null) {
             dragPointIndex = closest;
-            let p = clothPoints[closest];
-            selectedPoint = p;
-            dragPlaneZ = p.z; // Use z-coordinate of the point for drag plane
-            updateDragStatus(`Dragging point ${closest}`);
-          } else {
-            updateDragStatus("No point found. Try moving closer to a point.");
           }
         }
-      }
-      
-      // Find the closest visible point to mouse cursor
-      function findClosestPoint() {
-        let closest = null;
-        let closestDist = selectionRadius;
-        let closestDepth = Infinity;
-        
-        // First pass: find points within selection radius
-        for (let i = 0; i < clothPoints.length; i++) {
-          let p = clothPoints[i];
-          if (p.pinned) continue; // Skip pinned points
-          
-          // Convert 3D point to screen coordinates
-          let screenX = screenX(p.x, p.y, p.z);
-          let screenY = screenY(p.x, p.y, p.z);
-          let screenZ = screenZ(p.x, p.y, p.z); // Depth value
-          
-          let d = dist(mouseX, mouseY, screenX, screenY);
-          
-          // Check if point is within selection radius and closer to camera than previous candidates
-          if (d < closestDist && screenZ < closestDepth) {
-            closestDist = d;
-            closestDepth = screenZ;
-            closest = i;
-          }
-        }
-        
-        return closest;
-      }
-
-      // Improved function to convert screen coordinates to world coordinates
-      function unproject(mx, my, worldZ) {
-        // Get the camera position and direction
-        let cameraZ = (height/2) / tan(PI*30/180);
-        
-        // Convert mouse position to normalized device coordinates (-1 to 1)
-        let ndcX = (mx / width) * 2 - 1;
-        let ndcY = ((height - my) / height) * 2 - 1;
-        
-        // Calculate ray direction in view space
-        let rayDirX = ndcX * tan(PI/6); // 30 degrees FOV
-        let rayDirY = ndcY * tan(PI/6) * (height/width);
-        let rayDirZ = -1; // Forward direction
-        
-        // Scale the ray to hit the z-plane
-        let t = (worldZ - cameraPosition.z) / rayDirZ;
-        
-        // Calculate the world position
-        let worldX = cameraPosition.x + rayDirX * t;
-        let worldY = cameraPosition.y + rayDirY * t;
-        
-        return { x: worldX, y: worldY, z: worldZ };
       }
 
       function mouseDragged() {
         if (interactionMode === "drag" && dragPointIndex !== null) {
+          let mousePos = createVector(mouseX, mouseY);
           let p = clothPoints[dragPointIndex];
           
-          // Convert current mouse position to 3D coordinates
-          // Keep the z-coordinate of the point constant during dragging
-          let mouseWorldPos = screenToWorld(mouseX, mouseY, p.z);
+          // Create a ray from camera through mouse point
+          let ray = getMouseRay();
           
-          // Update point position
-          p.x = mouseWorldPos.x;
-          p.y = mouseWorldPos.y;
-          p.oldx = p.x; // Prevent velocity from affecting dragged point
-          p.oldy = p.y;
+          // Calculate where the ray intersects with Z-plane of the dragged point
+          let t = (p.z - eye().z) / ray.z;
           
-          // Debug info display
-          updateDragStatus(`Dragging point ${dragPointIndex} to (${int(p.x)}, ${int(p.y)}, ${int(p.z)})`);
+          if (t > 0) { // Only drag if ray is pointing forward
+            // Calculate world coordinates at intersection point
+            let worldX = eye().x + ray.x * t;
+            let worldY = eye().y + ray.y * t;
+            
+            // Update point position
+            p.x = worldX;
+            p.y = worldY;
+            // Keep Z position the same
+            
+            // Prevent physics velocity
+            p.oldx = p.x;
+            p.oldy = p.y;
+          }
         }
       }
       
-      // Convert screen coordinates to world coordinates
-      function screenToWorld(sx, sy, worldZ) {
-        // This function uses the current camera matrix to transform coordinates
-        push();
-        // Apply current camera transformation
-        if (doResetOrientation) {
-          resetMatrix();
-        }
+      // Helper function to get camera position
+      function eye() {
+        // For default orientation
+        let eyeZ = (height/2) / tan(PI/6); // 30 degrees FOV
+        return {
+          x: 0,
+          y: 0,
+          z: eyeZ
+        };
+      }
+      
+      // Get ray direction from mouse position
+      function getMouseRay() {
+        // Convert mouse coordinates to normalized device coordinates (-1 to 1)
+        let ndcX = (mouseX / width) * 2 - 1;
+        let ndcY = ((height - mouseY) / height) * 2 - 1;
         
-        // Create a ray from camera through mouse point
-        let ray = createVector(
-          (sx - width/2),
-          (sy - height/2),
-          -(height/2) / tan(PI/6) // Perspective division
-        );
-        ray.normalize();
+        // Calculate ray direction in camera space
+        let fov = PI/6; // 30 degrees
+        let rayDirX = ndcX * tan(fov);
+        let rayDirY = ndcY * tan(fov) * (height/width);
+        let rayDirZ = -1; // Forward direction
         
-        // Calculate distance to z plane
-        let cameraToPointZ = worldZ - cameraPosition.z;
-        let t = cameraToPointZ / ray.z;
-        
-        // Get world coordinates
-        let wx = cameraPosition.x + ray.x * t;
-        let wy = cameraPosition.y + ray.y * t;
-        
-        pop();
-        return { x: wx, y: wy, z: worldZ };
+        // Normalize ray direction
+        let rayLen = sqrt(rayDirX*rayDirX + rayDirY*rayDirY + rayDirZ*rayDirZ);
+        return {
+          x: rayDirX / rayLen,
+          y: rayDirY / rayLen,
+          z: rayDirZ / rayLen
+        };
       }
 
       function mouseReleased() {
-        if (dragPointIndex !== null) {
-          updateDragStatus("Drag Mode Active - Click and drag cloth points");
-          dragPointIndex = null;
-          selectedPoint = null;
-        }
+        dragPointIndex = null;
       }
 
       function draw() {
@@ -1159,19 +1095,11 @@
           camera(0, 0, (height/2) / tan(PI*30/180),
                  0, 0, 0,
                  0, 1, 0);
-                 
-          // Reset camera position
-          cameraPosition = { x: 0, y: 0, z: (height/2) / tan(PI*30/180) };
           doResetOrientation = false;
         }
 
         if (interactionMode === "rotate") {
-          // Store camera position for drag calculations
-          let camEyeZ = (height/2) / tan(PI*30/180);
           orbitControl();
-          
-          // Update our camera position tracking (approximation)
-          cameraPosition.z = camEyeZ;
         }
 
         if (simulationRunning) {
@@ -1219,15 +1147,12 @@
             push();
             translate(p.x, p.y, p.z);
             
-            // Highlight draggable points in drag mode
+            // Highlight currently dragged point
             if (interactionMode === "drag" && !p.pinned) {
               if (i === dragPointIndex) {
-                // Currently dragged point
                 fill(255, 0, 0); // Red
-                sphere(dragHandleSize);
+                sphere(6);
               } else {
-                // Regular draggable point
-                fill(255, 255, 255);
                 sphere(2);
               }
             } else {
@@ -1273,28 +1198,18 @@
               line(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
             }
             
-            // Draw draggable points
+            fill(255);
+            noStroke();
             for (let i = 0; i < clothPoints.length; i++) {
               let p = clothPoints[i];
               push();
               translate(p.x, p.y, p.z);
               
-              // Highlight draggable points in drag mode
-              if (interactionMode === "drag" && !p.pinned) {
-                if (i === dragPointIndex) {
-                  // Currently dragged point
-                  fill(255, 0, 0); // Red
-                  noStroke();
-                  sphere(dragHandleSize);
-                } else {
-                  // Regular draggable point
-                  fill(255);
-                  noStroke();
-                  sphere(2);
-                }
+              // Highlight dragged point
+              if (interactionMode === "drag" && !p.pinned && i === dragPointIndex) {
+                fill(255, 0, 0);
+                sphere(6);
               } else {
-                fill(255);
-                noStroke();
                 sphere(2);
               }
               pop();
@@ -1340,7 +1255,7 @@
             translate(p.x, p.y, p.z);
             fill(255, 0, 0);
             noStroke();
-            sphere(dragHandleSize);
+            sphere(6);
             pop();
           }
 
@@ -1363,22 +1278,15 @@
             line(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
           }
           
-          // Draw nodes - highlight draggable/dragged points
+          // Draw nodes
           for (let i = 0; i < clothPoints.length; i++) {
             let p = clothPoints[i];
             push();
             translate(p.x, p.y, p.z);
             
-            if (interactionMode === "drag" && !p.pinned) {
-              if (i === dragPointIndex) {
-                // Currently dragged point
-                fill(255, 0, 0); // Red
-                sphere(dragHandleSize);
-              } else {
-                // Regular draggable point
-                fill(255, 128, 128); // Light red
-                sphere(2);
-              }
+            if (interactionMode === "drag" && !p.pinned && i === dragPointIndex) {
+              fill(255, 0, 0);
+              sphere(6);
             } else {
               fill(255, 0, 0);
               sphere(2);
