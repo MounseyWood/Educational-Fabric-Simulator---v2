@@ -618,7 +618,8 @@
             clothPoints.push({
               x: px, y: py, z: pz,
               oldx: px, oldy: py, oldz: pz,
-              pinned: pinned
+              pinned: pinned,
+              userDragged: false
             });
             grid[y][x] = clothPoints.length - 1;
           }
@@ -635,7 +636,8 @@
             clothPoints.push({
               x: px, y: py, z: pz,
               oldx: px, oldy: py, oldz: pz,
-              pinned: false
+              pinned: false,
+              userDragged: false
             });
             grid[rz][cx] = clothPoints.length - 1;
           }
@@ -657,7 +659,8 @@
             clothPoints.push({
               x: mx, y: my, z: mz,
               oldx: mx, oldy: my, oldz: mz,
-              pinned: false
+              pinned: false,
+              userDragged: false
             });
             horizontal[y][x] = clothPoints.length - 1;
           }
@@ -676,7 +679,8 @@
             clothPoints.push({
               x: mx, y: my, z: mz,
               oldx: mx, oldy: my, oldz: mz,
-              pinned: false
+              pinned: false,
+              userDragged: false
             });
             vertical[y][x] = clothPoints.length - 1;
           }
@@ -701,7 +705,8 @@
             clothPoints.push({
               x: mx, y: my, z: mz,
               oldx: mx, oldy: my, oldz: mz,
-              pinned: false
+              pinned: false,
+              userDragged: false
             });
             centers[y][x] = clothPoints.length - 1;
             let restArea = computeQuadArea(A, B, C, D);
@@ -837,7 +842,7 @@
         let freq = 0.01;
         for (let i = 0; i < clothPoints.length; i++) {
           let p = clothPoints[i];
-          if (!p.pinned && i !== dragPointIndex) {
+          if (!p.pinned && !p.userDragged) {
             let vx = (p.x - p.oldx) * (dampingOn ? damping : BASE_DAMPING);
             let vy = (p.y - p.oldy) * (dampingOn ? damping : BASE_DAMPING);
             let vz = (p.z - p.oldz) * (dampingOn ? damping : BASE_DAMPING);
@@ -865,8 +870,8 @@
             let p1 = clothPoints[c.p1];
             let p2 = clothPoints[c.p2];
             
-            // Skip constraints for points being manually dragged
-            if (c.p1 === dragPointIndex || c.p2 === dragPointIndex) {
+            // Skip constraints if either point is being dragged
+            if (p1.userDragged || p2.userDragged) {
               continue;
             }
             
@@ -878,12 +883,14 @@
             let offsetX = dx * 0.5 * diff;
             let offsetY = dy * 0.5 * diff;
             let offsetZ = dz * 0.5 * diff;
-            if (!p1.pinned && c.p1 !== dragPointIndex) {
+            
+            if (!p1.pinned && !p1.userDragged) {
               p1.x += offsetX;
               p1.y += offsetY;
               p1.z += offsetZ;
             }
-            if (!p2.pinned && c.p2 !== dragPointIndex) {
+            
+            if (!p2.pinned && !p2.userDragged) {
               p2.x -= offsetX;
               p2.y -= offsetY;
               p2.z -= offsetZ;
@@ -908,6 +915,9 @@
           for (let j = i + 1; j < clothPoints.length; j++) {
             let p1 = clothPoints[i];
             let p2 = clothPoints[j];
+            // Skip dragged points
+            if (p1.userDragged || p2.userDragged) continue;
+            
             let dx = p2.x - p1.x;
             let dy = p2.y - p1.y;
             let dz = p2.z - p1.z;
@@ -935,7 +945,7 @@
       function doSphereCollision() {
         const collisionFriction = 0.5;
         for (let p of clothPoints) {
-          if (!p.pinned) {
+          if (!p.pinned && !p.userDragged) {
             let dx = p.x - sphereCentre.x;
             let dy = p.y - sphereCentre.y;
             let dz = p.z - sphereCentre.z;
@@ -959,7 +969,7 @@
       function doCylinderCollision() {
         const collisionFriction = 0.5;
         for (let p of clothPoints) {
-          if (!p.pinned) {
+          if (!p.pinned && !p.userDragged) {
             if (p.y > cylinderTopY && p.y < cylinderBottomY) {
               let r = sqrt(p.x*p.x + p.z*p.z);
               if (r < cylRadius) {
@@ -979,113 +989,172 @@
       function doFloorCollision() {
         const collisionFriction = 0.5;
         for (let p of clothPoints) {
-          if (!p.pinned && p.y > floorY) {
+          if (!p.pinned && !p.userDragged && p.y > floorY) {
             p.y = floorY;
             p.oldy = p.y - collisionFriction * (p.y - p.oldy);
           }
         }
       }
 
-      /* SIMPLIFIED DRAG FUNCTIONALITY */
+      /* IMPROVED DRAG FUNCTIONALITY */
       function mousePressed() {
         if (interactionMode === "drag") {
-          // Find closest point to mouse
-          let closest = null;
-          let closestDist = selectionRadius;
+          // Find best facing point using dot product approach
+          let bestPoint = null;
+          let bestScore = -Infinity;
+          let cameraZ = (height/2) / tan(PI*30/180);
           
           for (let i = 0; i < clothPoints.length; i++) {
             let p = clothPoints[i];
-            if (p.pinned) continue; // Skip pinned points
+            if (p.pinned) continue; // Skip permanently pinned points
             
-            // Project the 3D point to screen coordinates
-            let pointX = p.x;
-            let pointY = p.y;
-            let pointZ = p.z;
+            // Convert to screen coordinates for quick filtering
+            let screenX = p5.prototype.screenX(p.x, p.y, p.z);
+            let screenY = p5.prototype.screenY(p.x, p.y, p.z);
+            let screenZ = p5.prototype.screenZ(p.x, p.y, p.z);
             
-            // Use p5.js functions to convert 3D to screen coordinates
-            let projX = screenX(pointX, pointY, pointZ);
-            let projY = screenY(pointX, pointY, pointZ);
-            let projZ = screenZ(pointX, pointY, pointZ);
+            // Quick distance check for efficiency
+            let d = dist(mouseX, mouseY, screenX, screenY);
             
-            // Calculate distance to mouse in screen space
-            let d = dist(mouseX, mouseY, projX, projY);
-            
-            // Check if this point is closest and in front
-            if (d < closestDist) {
-              closestDist = d;
-              closest = i;
-              dragPlaneZ = pointZ;
+            if (d < selectionRadius) {
+              // Calculate "facing" score (combination of distance and depth)
+              // Lower Z (closer to camera) gets priority
+              let score = -d - screenZ * 0.1;
+              
+              if (score > bestScore) {
+                bestScore = score;
+                bestPoint = i;
+              }
             }
           }
           
-          if (closest !== null) {
-            dragPointIndex = closest;
+          if (bestPoint !== null) {
+            dragPointIndex = bestPoint;
+            clothPoints[dragPointIndex].userDragged = true;
+            clothPoints[dragPointIndex].oldx = clothPoints[dragPointIndex].x;
+            clothPoints[dragPointIndex].oldy = clothPoints[dragPointIndex].y;
+            clothPoints[dragPointIndex].oldz = clothPoints[dragPointIndex].z;
+            dragPlaneZ = clothPoints[dragPointIndex].z;
           }
         }
       }
 
       function mouseDragged() {
         if (interactionMode === "drag" && dragPointIndex !== null) {
-          let mousePos = createVector(mouseX, mouseY);
           let p = clothPoints[dragPointIndex];
           
-          // Create a ray from camera through mouse point
-          let ray = getMouseRay();
+          // Create a ray from camera through mouse
+          let cameraZ = (height/2) / tan(PI*30/180);
           
-          // Calculate where the ray intersects with Z-plane of the dragged point
-          let t = (p.z - eye().z) / ray.z;
+          // Create ray from mouse position
+          let eyeX = 0;
+          let eyeY = 0;
+          let eyeZ = cameraZ;
           
-          if (t > 0) { // Only drag if ray is pointing forward
-            // Calculate world coordinates at intersection point
-            let worldX = eye().x + ray.x * t;
-            let worldY = eye().y + ray.y * t;
+          // Convert mouse to normalized device coordinates
+          let ndcX = (mouseX - width/2) / (width/2);
+          let ndcY = (mouseY - height/2) / (height/2) * -1; // Flip Y for WebGL
+          
+          // Calculate ray direction
+          let rayDirX = ndcX * tan(PI/6); // 30 degree FOV
+          let rayDirY = ndcY * tan(PI/6) * (height/width);
+          let rayDirZ = -1.0; // Forward
+          
+          // Normalize ray direction (not strictly necessary but good practice)
+          let dirLength = sqrt(rayDirX*rayDirX + rayDirY*rayDirY + rayDirZ*rayDirZ);
+          rayDirX /= dirLength;
+          rayDirY /= dirLength;
+          rayDirZ /= dirLength;
+          
+          // Find intersection with z-plane at dragPlaneZ
+          let t = (dragPlaneZ - eyeZ) / rayDirZ;
+          
+          if (t > 0) { // Only if ray is pointing forward
+            // Calculate intersection point
+            let worldX = eyeX + rayDirX * t;
+            let worldY = eyeY + rayDirY * t;
             
             // Update point position
             p.x = worldX;
             p.y = worldY;
-            // Keep Z position the same
             
-            // Prevent physics velocity
+            // Set old position to current to avoid velocities
             p.oldx = p.x;
-            p.oldy = p.y;
+            p.oldy = p.y; 
           }
         }
       }
-      
-      // Helper function to get camera position
-      function eye() {
-        // For default orientation
-        let eyeZ = (height/2) / tan(PI/6); // 30 degrees FOV
-        return {
-          x: 0,
-          y: 0,
-          z: eyeZ
-        };
-      }
-      
-      // Get ray direction from mouse position
-      function getMouseRay() {
-        // Convert mouse coordinates to normalized device coordinates (-1 to 1)
-        let ndcX = (mouseX / width) * 2 - 1;
-        let ndcY = ((height - mouseY) / height) * 2 - 1;
-        
-        // Calculate ray direction in camera space
-        let fov = PI/6; // 30 degrees
-        let rayDirX = ndcX * tan(fov);
-        let rayDirY = ndcY * tan(fov) * (height/width);
-        let rayDirZ = -1; // Forward direction
-        
-        // Normalize ray direction
-        let rayLen = sqrt(rayDirX*rayDirX + rayDirY*rayDirY + rayDirZ*rayDirZ);
-        return {
-          x: rayDirX / rayLen,
-          y: rayDirY / rayLen,
-          z: rayDirZ / rayLen
-        };
-      }
 
       function mouseReleased() {
-        dragPointIndex = null;
+        if (dragPointIndex !== null) {
+          clothPoints[dragPointIndex].userDragged = false;
+          
+          // Give a little velocity when released
+          let p = clothPoints[dragPointIndex];
+          p.oldx = p.x - random(-1, 1) * 0.5;
+          p.oldy = p.y - random(-1, 1) * 0.5;
+          p.oldz = p.z - random(-1, 1) * 0.5;
+          
+          dragPointIndex = null;
+        }
+      }
+
+      function calcNormals() {
+        // Reset normals
+        for (let p of clothPoints) {
+          p.nx = p.ny = p.nz = 0;
+        }
+        
+        // Calculate face normals and add to vertices
+        for (let y = 0; y < rows - 1; y++) {
+          for (let x = 0; x < cols - 1; x++) {
+            let i1 = grid[y][x];
+            let i2 = grid[y][x+1];
+            let i3 = grid[y+1][x+1];
+            let i4 = grid[y+1][x];
+            
+            let p1 = clothPoints[i1];
+            let p2 = clothPoints[i2];
+            let p3 = clothPoints[i3];
+            let p4 = clothPoints[i4];
+            
+            // Calculate normal for triangle 1 (p1, p2, p3)
+            let ax = p2.x - p1.x, ay = p2.y - p1.y, az = p2.z - p1.z;
+            let bx = p3.x - p1.x, by = p3.y - p1.y, bz = p3.z - p1.z;
+            
+            let nx1 = ay * bz - az * by;
+            let ny1 = az * bx - ax * bz;
+            let nz1 = ax * by - ay * bx;
+            
+            // Calculate normal for triangle 2 (p1, p3, p4)
+            let cx = p3.x - p1.x, cy = p3.y - p1.y, cz = p3.z - p1.z;
+            let dx = p4.x - p1.x, dy = p4.y - p1.y, dz = p4.z - p1.z;
+            
+            let nx2 = cy * dz - cz * dy;
+            let ny2 = cz * dx - cx * dz;
+            let nz2 = cx * dy - cy * dx;
+            
+            // Add normals to vertices
+            p1.nx += nx1 + nx2; p1.ny += ny1 + ny2; p1.nz += nz1 + nz2;
+            p2.nx += nx1; p2.ny += ny1; p2.nz += nz1;
+            p3.nx += nx1 + nx2; p3.ny += ny1 + ny2; p3.nz += nz1 + nz2;
+            p4.nx += nx2; p4.ny += ny2; p4.nz += nz2;
+          }
+        }
+        
+        // Normalize all normals
+        for (let p of clothPoints) {
+          let len = sqrt(p.nx*p.nx + p.ny*p.ny + p.nz*p.nz);
+          if (len > 0.0001) {
+            p.nx /= len;
+            p.ny /= len;
+            p.nz /= len;
+          } else {
+            p.nx = 0;
+            p.ny = 1;
+            p.nz = 0;
+          }
+        }
       }
 
       function draw() {
@@ -1105,6 +1174,8 @@
         if (simulationRunning) {
           updateCloth();
         }
+        
+        calcNormals();
 
         // If draped mode, draw the chosen form + invisible floor
         if (simulationMode === "draped") {
@@ -1147,15 +1218,19 @@
             push();
             translate(p.x, p.y, p.z);
             
-            // Highlight currently dragged point
-            if (interactionMode === "drag" && !p.pinned) {
-              if (i === dragPointIndex) {
-                fill(255, 0, 0); // Red
-                sphere(6);
-              } else {
-                sphere(2);
-              }
+            if (p.userDragged) {
+              // Dragged point
+              fill(255, 0, 0);
+              sphere(dragHandleSize);
+            } else if (p.pinned) {
+              // Pinned point
+              fill(0, 255, 0);
+              sphere(3);
+            } else if (interactionMode === "drag" && !p.pinned) {
+              // Regular points in drag mode
+              sphere(2);
             } else {
+              // Regular points
               sphere(2);
             }
             pop();
@@ -1205,10 +1280,9 @@
               push();
               translate(p.x, p.y, p.z);
               
-              // Highlight dragged point
-              if (interactionMode === "drag" && !p.pinned && i === dragPointIndex) {
+              if (p.userDragged) {
                 fill(255, 0, 0);
-                sphere(6);
+                sphere(dragHandleSize);
               } else {
                 sphere(2);
               }
@@ -1249,13 +1323,13 @@
           }
           
           // Draw dragged point
-          if (interactionMode === "drag" && dragPointIndex !== null) {
+          if (dragPointIndex !== null) {
             let p = clothPoints[dragPointIndex];
             push();
             translate(p.x, p.y, p.z);
             fill(255, 0, 0);
             noStroke();
-            sphere(6);
+            sphere(dragHandleSize);
             pop();
           }
 
@@ -1284,9 +1358,9 @@
             push();
             translate(p.x, p.y, p.z);
             
-            if (interactionMode === "drag" && !p.pinned && i === dragPointIndex) {
+            if (p.userDragged) {
               fill(255, 0, 0);
-              sphere(6);
+              sphere(dragHandleSize);
             } else {
               fill(255, 0, 0);
               sphere(2);
